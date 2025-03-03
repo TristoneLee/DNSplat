@@ -204,13 +204,13 @@ class DatasetRE10k(IterableDataset):
 
     def convert_poses(
         self,
-        poses: Float[Tensor, "batch 18"],
+        poses: Float[Tensor, "batch 16"],  # 修改为16维
     ) -> tuple[
         Float[Tensor, "batch 4 4"],  # extrinsics
         Float[Tensor, "batch 3 3"],  # intrinsics
     ]:
         b, _ = poses.shape
-
+        
         # Convert the intrinsics to a 3x3 normalized K matrix.
         intrinsics = torch.eye(3, dtype=torch.float32)
         intrinsics = repeat(intrinsics, "h w -> b h w", b=b).clone()
@@ -222,7 +222,7 @@ class DatasetRE10k(IterableDataset):
 
         # Convert the extrinsics to a 4x4 OpenCV-style W2C matrix.
         w2c = repeat(torch.eye(4, dtype=torch.float32), "h w -> b h w", b=b).clone()
-        w2c[:, :3] = rearrange(poses[:, 6:], "b (h w) -> b h w", h=3, w=4)
+        w2c[:, :3] = rearrange(poses[:, 4:], "b (h w) -> b h w", h=3, w=4)  # 从索引4开始而不是6
         return w2c.inverse(), intrinsics
 
     def convert_images(

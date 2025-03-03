@@ -6,6 +6,8 @@ import torch
 from einops import rearrange
 from torch import nn
 
+from . import BackboneCrocoCfg, croco_params
+
 from .croco.blocks import DecoderBlock
 from .croco.croco import CroCoNet
 from .croco.misc import fill_default_args, freeze_all_params, transpose_to_landscape, is_symmetrized, interleave, \
@@ -13,49 +15,6 @@ from .croco.misc import fill_default_args, freeze_all_params, transpose_to_lands
 from .croco.patch_embed import get_patch_embed
 from .backbone import Backbone
 from ....geometry.camera_emb import get_intrinsic_embedding
-
-inf = float('inf')
-
-
-croco_params = {
-    'ViTLarge_BaseDecoder': {
-        'enc_depth': 24,
-        'dec_depth': 12,
-        'enc_embed_dim': 1024,
-        'dec_embed_dim': 768,
-        'enc_num_heads': 16,
-        'dec_num_heads': 12,
-        'pos_embed': 'RoPE100',
-        'img_size': (512, 512),
-    },
-}
-
-default_dust3r_params = {
-    'enc_depth': 24,
-    'dec_depth': 12,
-    'enc_embed_dim': 1024,
-    'dec_embed_dim': 768,
-    'enc_num_heads': 16,
-    'dec_num_heads': 12,
-    'pos_embed': 'RoPE100',
-    'patch_embed_cls': 'PatchEmbedDust3R',
-    'img_size': (512, 512),
-    'head_type': 'dpt',
-    'output_mode': 'pts3d',
-    'depth_mode': ('exp', -inf, inf),
-    'conf_mode': ('exp', 1, inf)
-}
-
-
-@dataclass
-class BackboneCrocoCfg:
-    name: Literal["croco"]
-    model: Literal["ViTLarge_BaseDecoder", "ViTBase_SmallDecoder", "ViTBase_BaseDecoder"]  # keep interface for the last two models, but they are not supported
-    patch_embed_cls: str = 'PatchEmbedDust3R'  # PatchEmbedDust3R or ManyAR_PatchEmbed
-    asymmetry_decoder: bool = True
-    intrinsics_embed_loc: Literal["encoder", "decoder", "none"] = 'none'
-    intrinsics_embed_degree: int = 0
-    intrinsics_embed_type: Literal["pixelwise", "linear", "token"] = 'token'  # linear or dpt
 
 
 class AsymmetricCroCoMulti(CroCoNet):

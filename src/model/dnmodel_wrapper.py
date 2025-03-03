@@ -21,7 +21,7 @@ from ..loss import Loss
 from ..loss.loss_point import Regr3D
 from ..loss.loss_ssim import ssim
 from ..misc.benchmarker import Benchmarker
-from ..misc.cam_utils import update_pose, get_pnp_pose
+from ..misc.cam_utils import quaternion_from_matrix, update_pose, get_pnp_pose
 from ..misc.image_io import prep_image, save_image, save_video
 from ..misc.LocalLogger import LOG_PATH, LocalLogger
 from ..misc.nn_module_tools import convert_to_buffer
@@ -154,7 +154,8 @@ class ModelWrapper(LightningModule):
         visualization_dump = None
         if self.distiller is not None:
             visualization_dump = {}
-        gaussians = self.encoder(batch["context"], self.global_step, visualization_dump=visualization_dump)
+        ret = self.encoder(batch["context"], self.global_step, visualization_dump=visualization_dump)
+        gaussians = ret['gaussians']
         output = self.decoder.forward(
             gaussians,
             batch["target"]["extrinsics"],
@@ -165,6 +166,16 @@ class ModelWrapper(LightningModule):
             depth_mode=self.train_cfg.depth_mode,
         )
         target_gt = batch["target"]["image"]
+        
+        context_extrinsics = batch["context"]["extrinsics"].reshape(-1, 4, 4)
+        context_trans, context_qua = quaternion_from_matrix(context_extrinsics)
+        pred_extrinsic = ret['pred_extrinsics']
+        pred_trans_list = []
+        pred_qua_list = []   
+        for i in range(len(pred_extrinsic)):
+            pred_trans, pred_qua = quaternion_from_matrix(pred_extrinsic[i].reshape(-1, 4, 4))
+            pred_trans_list.append(pred_trans)
+            pred_qua_list.append(pred_qua)
 
         # Compute metrics.
         psnr_probabilistic = compute_psnr(
@@ -179,6 +190,25 @@ class ModelWrapper(LightningModule):
             loss = loss_fn.forward(output, batch, gaussians, self.global_step)
             self.log(f"loss/{loss_fn.name}", loss)
             total_loss = total_loss + loss
+            
+        # quad loss
+        quad_loss = 0.
+        for i in range(len(pred_qua_list)):
+            cur_loss = torch.mean(1 - torch.sum(pred_qua_list[i] * context_qua, dim=-1) ** 2)
+            quad_loss += cur_loss
+            self.log("loss/quad_loss_{i}", cur_loss)
+        quad_loss = quad_loss / len(pred_qua_list)
+        self.log("loss/quad_loss_mean", quad_loss)
+        total_loss = total_loss + quad_loss
+        
+        trans_loss = 0.
+        for i in range(len(pred_trans_list)):
+            cur_loss = torch.mean(torch.norm(pred_trans_list[i] - context_trans, dim=-1))
+            trans_loss += cur_loss
+            self.log("loss/trans_loss_{i}", cur_loss)
+        trans_loss = trans_loss / len(pred_trans_list)
+        self.log("loss/trans_loss_mean", trans_loss)
+        total_loss = total_loss + trans_loss
 
         # distillation
         if self.distiller is not None and self.global_step <= self.train_cfg.distill_max_steps:
@@ -682,8 +712,8 @@ class ModelWrapper(LightningModule):
         for name, param in self.named_parameters():
             if not param.requires_grad:
                 continue
-
-            if "gaussian_param_head" in name or "intrinsic_encoder" in name:
+            new_param_list=['gaussian_param_head', 'intrinsic_encoder','extrinsics_decoder','pluck_embedder']
+            if any([x in name for x in new_param_list]):
                 new_params.append(param)
                 new_param_names.append(name)
             else:

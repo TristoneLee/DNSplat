@@ -16,6 +16,7 @@
 
 import torch
 import torch.nn as nn 
+import torch.nn.functional as F
 
 from itertools import repeat
 import collections.abc
@@ -78,6 +79,24 @@ class Mlp(nn.Module):
         x = self.drop2(x)
         return x
 
+
+class FFN(nn.Module):
+    """Very simple multi-layer perceptron (also called FFN)"""
+
+    def __init__(self, input_dim, hidden_dim, output_dim, num_layers):
+        super().__init__()
+        self.num_layers = num_layers
+        h = [hidden_dim] * (num_layers - 1)
+        self.layers = nn.ModuleList(
+            nn.Linear(n, k) for n, k in zip([input_dim] + h, h + [output_dim])
+        )
+
+    def forward(self, x):
+        for i, layer in enumerate(self.layers):
+            x = F.relu(layer(x)) if i < self.num_layers - 1 else layer(x)
+        return x
+    
+
 class Attention(nn.Module):
 
     def __init__(self, dim, rope=None, num_heads=8, qkv_bias=False, attn_drop=0., proj_drop=0.):
@@ -125,8 +144,16 @@ class Block(nn.Module):
         self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop)
 
     def forward(self, x, xpos):
-        x = x + self.drop_path(self.attn(self.norm1(x), xpos))
-        x = x + self.drop_path(self.mlp(self.norm2(x)))
+        if len(x.shape) == 4:
+            # B, V, N, D -> B, V*N, D
+            b, v = x.shape[0], x.shape[1]
+            x = x.reshape(x.shape[0], -1, x.shape[-1])
+            x = x + self.drop_path(self.attn(self.norm1(x), xpos))
+            x = x + self.drop_path(self.mlp(self.norm2(x)))
+            x = x.reshape(b, v, -1, x.shape[-1])
+        else:
+            x = x + self.drop_path(self.attn(self.norm1(x), xpos))
+            x = x + self.drop_path(self.mlp(self.norm2(x)))
         return x
 
 class CrossAttention(nn.Module):
@@ -167,7 +194,7 @@ class CrossAttention(nn.Module):
         x = self.proj(x)
         x = self.proj_drop(x)
         return x
-
+    
 class DecoderBlock(nn.Module):
 
     def __init__(self, dim, num_heads, mlp_ratio=4., qkv_bias=False, drop=0., attn_drop=0.,

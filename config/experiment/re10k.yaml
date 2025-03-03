@@ -3,7 +3,7 @@
 defaults:
   - /dataset@_group_.re10k: re10k
   - override /model/encoder: noposplat
-  - override /model/encoder/backbone: croco
+  - override /model/encoder/backbone: croco_dn
   - override /loss: [mse, lpips]
 
 wandb:
@@ -16,7 +16,6 @@ model:
     pose_free: true
     intrinsics_embed_loc: encoder
     intrinsics_embed_type: token
-    pretrained_weights: './pretrained_weights/MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric.pth'
   decoder:
     make_scale_invariant: true
 

@@ -1,7 +1,7 @@
 defaults:
-  - backbone: croco
+  - backbone: croco_dn
 
-name: noposplat
+name: dnsplat
 
 opacity_mapping:
   initial: 0.0
@@ -30,4 +30,4 @@ apply_bounds_shim: true
 
 gs_params_head_type: dpt_gs
 pose_free: true
-pretrained_weights: ""
+pretrained_weights: 'pretrained_weights/MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric.pth'

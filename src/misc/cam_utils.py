@@ -123,6 +123,12 @@ def update_pose(cam_trans_delta: Float[Tensor, "batch 3"],
                 # converged_threshold: float = 1e-4
                 ):
     # extrinsics is c2w, here we need w2c as input, so we need to invert it
+    view_input = len(extrinsics.shape) == 4
+    if view_input:
+        B,V = extrinsics.shape[0], extrinsics.shape[1]
+        extrinsics = extrinsics.reshape(B*V, 4, 4)
+        cam_trans_delta = cam_trans_delta.reshape(B*V, 3)
+        cam_rot_delta = cam_rot_delta.reshape(B*V, 3)
     bs = cam_trans_delta.shape[0]
 
     tau = torch.cat([cam_trans_delta, cam_rot_delta], dim=-1)
@@ -134,7 +140,7 @@ def update_pose(cam_trans_delta: Float[Tensor, "batch 3"],
         new_w2c_list.append(new_w2c)
 
     new_w2c = torch.stack(new_w2c_list, dim=0)
-    return new_w2c.inverse()
+    return new_w2c.inverse() if not view_input else new_w2c.inverse().reshape(B, V, 4, 4)
 
     # converged = tau.norm() < converged_threshold
     # camera.update_RT(new_R, new_T)
@@ -191,3 +197,77 @@ def pose_auc(errors, thresholds):
         e = np.r_[errors[:last_index], t]
         aucs.append(np.trapz(r, x=e) / t)
     return aucs
+
+def quaternion_from_matrix(matrix: torch.Tensor):
+    """Convert rotation matrices to quaternions.
+    Args:
+        matrix: [B, 4, 4] or [4, 4] transformation matrix
+    Returns:
+        position: [B, 3] or [3] translation vector
+        quaternion: [B, 4] or [4] rotation quaternion
+    """
+    if matrix.dim() == 2:
+        matrix = matrix.unsqueeze(0)
+    
+    B = matrix.shape[0]
+    device = matrix.device
+    dtype = matrix.dtype
+    
+    rotation = matrix[:, :3, :3]
+    trace = rotation.diagonal(dim1=1, dim2=2).sum(-1)  # [B]
+    
+    q = torch.zeros(B, 4, device=device, dtype=dtype)
+    eps = 1e-7  # numerical stability
+    
+    # Handle positive trace
+    pos_mask = trace > 0
+    if pos_mask.any():
+        S = torch.sqrt(trace[pos_mask] + 1.0) * 2
+        q[pos_mask, 0] = 0.25 * S
+        q[pos_mask, 1] = (rotation[pos_mask, 2, 1] - rotation[pos_mask, 1, 2]) / (S + eps)
+        q[pos_mask, 2] = (rotation[pos_mask, 0, 2] - rotation[pos_mask, 2, 0]) / (S + eps)
+        q[pos_mask, 3] = (rotation[pos_mask, 1, 0] - rotation[pos_mask, 0, 1]) / (S + eps)
+    
+    # Handle negative trace
+    neg_mask = ~pos_mask
+    if neg_mask.any():
+        # Find largest diagonal element
+        max_diag = torch.argmax(rotation[neg_mask].diagonal(dim1=1, dim2=2), dim=1)  # [B']
+        
+        for i in range(3):
+            i_mask = neg_mask.clone()
+            i_mask[neg_mask] = max_diag == i
+            if not i_mask.any():
+                continue
+                
+            if i == 0:  # max value at rotation[0,0]
+                S = torch.sqrt(1.0 + rotation[i_mask, 0, 0] - rotation[i_mask, 1, 1] - rotation[i_mask, 2, 2]) * 2
+                q[i_mask, 0] = (rotation[i_mask, 2, 1] - rotation[i_mask, 1, 2]) / (S + eps)
+                q[i_mask, 1] = 0.25 * S
+                q[i_mask, 2] = (rotation[i_mask, 0, 1] + rotation[i_mask, 1, 0]) / (S + eps)
+                q[i_mask, 3] = (rotation[i_mask, 0, 2] + rotation[i_mask, 2, 0]) / (S + eps)
+            elif i == 1:  # max value at rotation[1,1]
+                S = torch.sqrt(1.0 + rotation[i_mask, 1, 1] - rotation[i_mask, 0, 0] - rotation[i_mask, 2, 2]) * 2
+                q[i_mask, 0] = (rotation[i_mask, 0, 2] - rotation[i_mask, 2, 0]) / (S + eps)
+                q[i_mask, 1] = (rotation[i_mask, 0, 1] + rotation[i_mask, 1, 0]) / (S + eps)
+                q[i_mask, 2] = 0.25 * S
+                q[i_mask, 3] = (rotation[i_mask, 1, 2] + rotation[i_mask, 2, 1]) / (S + eps)
+            else:  # max value at rotation[2,2]
+                S = torch.sqrt(1.0 + rotation[i_mask, 2, 2] - rotation[i_mask, 0, 0] - rotation[i_mask, 1, 1]) * 2
+                q[i_mask, 0] = (rotation[i_mask, 1, 0] - rotation[i_mask, 0, 1]) / (S + eps)
+                q[i_mask, 1] = (rotation[i_mask, 0, 2] + rotation[i_mask, 2, 0]) / (S + eps)
+                q[i_mask, 2] = (rotation[i_mask, 1, 2] + rotation[i_mask, 2, 1]) / (S + eps)
+                q[i_mask, 3] = 0.25 * S
+    
+    # Normalize quaternions
+    q = q / (torch.norm(q, dim=1, keepdim=True) + eps)
+    
+    # Get positions
+    position = matrix[:, :3, 3]
+    
+    # Remove batch dimension if input was unbatched
+    if matrix.shape[0] == 1:
+        position = position.squeeze(0)
+        q = q.squeeze(0)
+        
+    return position, q

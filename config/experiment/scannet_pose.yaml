@@ -16,7 +16,7 @@ model:
     pose_free: true
     intrinsics_embed_loc: encoder
     intrinsics_embed_type: token
-    pretrained_weights: './pretrained_weights/MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric.pth'
+    pretrained_weights: './pretrained_weights/re10k.ckpt'
 
 dataset:
   scannet_pose:

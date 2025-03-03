@@ -30,7 +30,7 @@ with install_import_hook(
     from src.misc.wandb_tools import update_checkpoint_path
     from src.model.decoder import get_decoder
     from src.model.encoder import get_encoder
-    from src.model.model_wrapper import ModelWrapper
+    from src.model.dnmodel_wrapper import ModelWrapper
 
 
 def cyan(text: str) -> str:
@@ -128,20 +128,25 @@ def train(cfg_dict: DictConfig):
             ckpt_weights = ckpt_weights['model']
             ckpt_weights = checkpoint_filter_fn(ckpt_weights, encoder)
             missing_keys, unexpected_keys = encoder.load_state_dict(ckpt_weights, strict=False)
+            print('Missing keys:', missing_keys)
+            print('Unexpected keys:', unexpected_keys)
         elif 'state_dict' in ckpt_weights:
             ckpt_weights = ckpt_weights['state_dict']
             ckpt_weights = {k[8:]: v for k, v in ckpt_weights.items() if k.startswith('encoder.')}
             missing_keys, unexpected_keys = encoder.load_state_dict(ckpt_weights, strict=False)
+            print('Missing keys:', missing_keys)
+            print('Unexpected keys:', unexpected_keys)
         else:
             raise ValueError(f"Invalid checkpoint format: {weight_path}")
-
+        
+    decoder = get_decoder(cfg.model.decoder)
     model_wrapper = ModelWrapper(
         cfg.optimizer,
         cfg.test,
         cfg.train,
         encoder,
         encoder_visualizer,
-        get_decoder(cfg.model.decoder),
+        decoder,
         get_losses(cfg.loss),
         step_tracker,
         distiller=distiller,
