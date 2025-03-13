@@ -33,6 +33,7 @@ def get_intrinsic_embedding(context, degree=0, downsample=1, merge_hw=False):
 
 def build_rays_torch(c2ws, ixts, H, W, scale=1.0):
     H, W = int(H*scale), int(W*scale)
+    ixts = ixts.clone()  # Avoid in-place operation
     ixts[:,:2] *= scale
     rays_o = c2ws[:,:3, 3][:,None,None]
     X, Y = torch.meshgrid(torch.arange(W), torch.arange(H), indexing='xy')

@@ -80,6 +80,42 @@ def SO3_exp(theta):
             + (torch.sin(angle) / angle) * W
             + ((1 - torch.cos(angle)) / (angle**2)) * W2
         )
+        
+# def SE3_exp(tau):
+#     dtype = tau.dtype
+#     device = tau.device
+
+#     rho = tau[:3]
+#     theta = tau[3:]
+#     R = SO3_exp(theta)
+#     t = V(theta) @ rho
+
+#     # 非原地构造变换矩阵
+#     T = torch.eye(4, dtype=dtype, device=device)
+#     T = torch.cat([
+#         torch.cat([R, t.unsqueeze(-1)], dim=-1),
+#         torch.tensor([[0, 0, 0, 1]], dtype=dtype, device=device)
+#     ], dim=0)
+#     return T
+
+# def V(theta):
+#     dtype = theta.dtype
+#     device = theta.device
+#     I = torch.eye(3, device=device, dtype=dtype)
+#     W = skew_sym_mat(theta)
+#     W2 = W @ W
+#     angle = torch.norm(theta)
+#     eps = 1e-8  # 防止除零
+
+#     # 使用掩码避免条件分支
+#     small_angle = angle < 1e-4
+#     term = torch.where(
+#         small_angle,
+#         (1/6) - (angle**2)/120,  # 泰勒近似
+#         (angle - torch.sin(angle)) / (angle**3 + eps)
+#     )
+    
+#     return I + W * ((1.0 - torch.cos(angle)) / (angle**2 + eps)) + W2 * term
 
 
 def V(theta):
@@ -89,7 +125,7 @@ def V(theta):
     W = skew_sym_mat(theta)
     W2 = W @ W
     angle = torch.norm(theta)
-    if angle < 1e-5:
+    if angle < 1e-4:
         V = I + 0.5 * W + (1.0 / 6.0) * W2
     else:
         V = (

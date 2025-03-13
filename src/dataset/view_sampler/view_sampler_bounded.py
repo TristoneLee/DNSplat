@@ -38,6 +38,7 @@ class ViewSamplerBounded(ViewSampler[ViewSamplerBoundedCfg]):
         Float[Tensor, " overlap"],  # overlap
     ]:
         num_views, _, _ = extrinsics.shape
+        self.is_overfitting = True
 
         # Compute the context view spacing based on the current global step.
         if self.stage == "test":

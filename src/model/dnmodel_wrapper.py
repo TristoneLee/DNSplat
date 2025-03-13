@@ -166,16 +166,15 @@ class ModelWrapper(LightningModule):
             depth_mode=self.train_cfg.depth_mode,
         )
         target_gt = batch["target"]["image"]
-        
         context_extrinsics = batch["context"]["extrinsics"].reshape(-1, 4, 4)
-        context_trans, context_qua = quaternion_from_matrix(context_extrinsics)
+        # context_trans, context_qua = quaternion_from_matrix(context_extrinsics)
         pred_extrinsic = ret['pred_extrinsics']
-        pred_trans_list = []
-        pred_qua_list = []   
-        for i in range(len(pred_extrinsic)):
-            pred_trans, pred_qua = quaternion_from_matrix(pred_extrinsic[i].reshape(-1, 4, 4))
-            pred_trans_list.append(pred_trans)
-            pred_qua_list.append(pred_qua)
+        # pred_trans_list = []
+        # pred_qua_list = []   
+        # for i in range(len(pred_extrinsic)):
+        #     pred_trans, pred_qua = quaternion_from_matrix(pred_extrinsic[i].reshape(-1, 4, 4))
+        #     pred_trans_list.append(pred_trans)
+        #     pred_qua_list.append(pred_qua)
 
         # Compute metrics.
         psnr_probabilistic = compute_psnr(
@@ -191,24 +190,33 @@ class ModelWrapper(LightningModule):
             self.log(f"loss/{loss_fn.name}", loss)
             total_loss = total_loss + loss
             
-        # quad loss
-        quad_loss = 0.
-        for i in range(len(pred_qua_list)):
-            cur_loss = torch.mean(1 - torch.sum(pred_qua_list[i] * context_qua, dim=-1) ** 2)
-            quad_loss += cur_loss
-            self.log("loss/quad_loss_{i}", cur_loss)
-        quad_loss = quad_loss / len(pred_qua_list)
-        self.log("loss/quad_loss_mean", quad_loss)
-        total_loss = total_loss + quad_loss
+        # # quad loss
+        # quad_loss = 0.
+        # for i in range(len(pred_qua_list)):
+        #     cur_loss = torch.mean(1 - torch.sum(pred_qua_list[i] * context_qua, dim=-1) ** 2)
+        #     quad_loss += cur_loss
+        # quad_loss = quad_loss / len(pred_qua_list)
+        # self.log("loss/quad_loss_mean", quad_loss)
+        # total_loss = total_loss + quad_loss
         
-        trans_loss = 0.
-        for i in range(len(pred_trans_list)):
-            cur_loss = torch.mean(torch.norm(pred_trans_list[i] - context_trans, dim=-1))
-            trans_loss += cur_loss
-            self.log("loss/trans_loss_{i}", cur_loss)
-        trans_loss = trans_loss / len(pred_trans_list)
-        self.log("loss/trans_loss_mean", trans_loss)
-        total_loss = total_loss + trans_loss
+        # trans_loss = 0.
+        # for i in range(len(pred_trans_list)):
+        #     cur_loss = torch.mean(torch.norm(pred_trans_list[i] - context_trans, dim=-1))
+        #     trans_loss += cur_loss
+        # trans_loss = trans_loss / len(pred_trans_list)
+        # self.log("loss/trans_loss_mean", trans_loss)
+        # total_loss = total_loss + trans_loss
+        
+        pose_loss= 0.
+        for pd in pred_extrinsic:
+            # Reshape pd to match context_extrinsics shape
+            # Original pd shape is likely [B, V, 4, 4]
+                # Reshape to match context_extrinsics which is [-1, 4, 4]
+            pd_reshaped = pd.reshape(-1, 4, 4)
+            pose_loss += torch.nn.functional.mse_loss(pd_reshaped, context_extrinsics)
+        pose_loss = pose_loss / len(pred_extrinsic)
+        self.log("loss/pose_loss_mean", pose_loss)
+        total_loss = total_loss + pose_loss*0.1
 
         # distillation
         if self.distiller is not None and self.global_step <= self.train_cfg.distill_max_steps:
@@ -254,7 +262,7 @@ class ModelWrapper(LightningModule):
             gaussians = self.encoder(
                 batch["context"],
                 self.global_step,
-            )
+            )['gaussians']
 
         # align the target pose
         if self.test_cfg.align_pose:
@@ -407,11 +415,12 @@ class ModelWrapper(LightningModule):
         b, _, _, h, w = batch["target"]["image"].shape
         assert b == 1
         visualization_dump = {}
-        gaussians = self.encoder(
+        ret  = self.encoder(
             batch["context"],
             self.global_step,
             visualization_dump=visualization_dump,
         )
+        gaussians = ret['gaussians']
         output = self.decoder.forward(
             gaussians,
             batch["target"]["extrinsics"],
@@ -613,7 +622,7 @@ class ModelWrapper(LightningModule):
         loop_reverse: bool = True,
     ) -> None:
         # Render probabilistic estimate of scene.
-        gaussians = self.encoder(batch["context"], self.global_step)
+        gaussians = self.encoder(batch["context"], self.global_step)['gaussians']
 
         t = torch.linspace(0, 1, num_frames, dtype=torch.float32, device=self.device)
         if smooth:

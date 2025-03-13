@@ -113,22 +113,31 @@ class EncoderNoPoSplat(Encoder[EncoderNoPoSplatCfg]):
         b, v, _, h, w = context["image"].shape
 
         # Encode the context images.
-        dec, shape, view = self.backbone(context, return_views=True)
+        dec1, dec2, shape1, shape2, view1, view2 = self.backbone(context, return_views=True)
         with torch.cuda.amp.autocast(enabled=False):
-            res = self._downstream_head(1, [tok.float() for tok in dec], shape)
-            
+            res1 = self._downstream_head(1, [tok.float() for tok in dec1], shape1)
+            res2 = self._downstream_head(2, [tok.float() for tok in dec2], shape2)
+
             # for the 3DGS heads
             if self.gs_params_head_type == 'linear':
-                GS_res = rearrange_head(self.gaussian_param_head(dec[-1]), self.patch_size, h, w)
+                GS_res1 = rearrange_head(self.gaussian_param_head(dec1[-1]), self.patch_size, h, w)
+                GS_res2 = rearrange_head(self.gaussian_param_head2(dec2[-1]), self.patch_size, h, w)
             elif self.gs_params_head_type == 'dpt':
-                GS_res = self.gaussian_param_head([tok.float() for tok in dec], shape[0].cpu().tolist())
-                GS_res = rearrange(GS_res, "b d h w -> b (h w) d")
-            elif self.gs_params_head_type == 'dpt_gs':
-                GS_res1 = self.gaussian_param_head([tok.float() for tok in dec], res['pts3d'].permute(0, 3, 1, 2), view['img'][:, :3], shape[0].cpu().tolist())
+                GS_res1 = self.gaussian_param_head([tok.float() for tok in dec1], shape1[0].cpu().tolist())
                 GS_res1 = rearrange(GS_res1, "b d h w -> b (h w) d")
+                GS_res2 = self.gaussian_param_head2([tok.float() for tok in dec2], shape2[0].cpu().tolist())
+                GS_res2 = rearrange(GS_res2, "b d h w -> b (h w) d")
+            elif self.gs_params_head_type == 'dpt_gs':
+                GS_res1 = self.gaussian_param_head([tok.float() for tok in dec1], res1['pts3d'].permute(0, 3, 1, 2), view1['img'][:, :3], shape1[0].cpu().tolist())
+                GS_res1 = rearrange(GS_res1, "b d h w -> b (h w) d")
+                GS_res2 = self.gaussian_param_head2([tok.float() for tok in dec2], res2['pts3d'].permute(0, 3, 1, 2), view2['img'][:, :3], shape2[0].cpu().tolist())
+                GS_res2 = rearrange(GS_res2, "b d h w -> b (h w) d")
 
-        pts3d = res['pts3d']
-        pts3d = rearrange(pts3d, "b h w d -> b (h w) d")
+        pts3d1 = res1['pts3d']
+        pts3d1 = rearrange(pts3d1, "b h w d -> b (h w) d")
+        pts3d2 = res2['pts3d']
+        pts3d2 = rearrange(pts3d2, "b h w d -> b (h w) d")
+        pts_all = torch.stack((pts3d1, pts3d2), dim=1)
         pts_all = pts_all.unsqueeze(-2)  # for cfg.num_surfaces
 
         depths = pts_all[..., -1].unsqueeze(-1)

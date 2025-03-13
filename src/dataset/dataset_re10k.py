@@ -107,10 +107,11 @@ class DatasetRE10k(IterableDataset):
             # Load the chunk.
             chunk = torch.load(chunk_path)
 
-            if self.cfg.overfit_to_scene is not None:
-                item = [x for x in chunk if x["key"] == self.cfg.overfit_to_scene]
-                assert len(item) == 1
-                chunk = item * len(chunk)
+            # if self.cfg.overfit_to_scene is not None:
+            # item = [x for x in chunk if x["key"] == self.cfg.overfit_to_scene]
+            item = [x for x in chunk if x["key"] == '015f5a7965860c29']
+            assert len(item) == 1
+            chunk = item * len(chunk)
 
             if self.stage in ("train", "val"):
                 chunk = self.shuffle(chunk)

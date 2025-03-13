@@ -50,10 +50,15 @@ def reg_dense_depth(xyz, mode):
         return xyz * d.square()
 
     if mode == 'exp':
-        exp_d = d.expm1()
+        d_safe = d.clip(min=1e-8, max=50.0)  # 添加上限以防止exp爆炸
+        xyz_normalized = xyz / d_safe
+        
+        # 使用更安全的exp计算
+        exp_d = torch.exp(torch.log1p(d_safe))  # 使用log1p和exp组合替代expm1
+        
         if not no_bounds:
             exp_d = exp_d.clip(min=vmin, max=vmax)
-        xyz = xyz * exp_d
+        xyz = xyz_normalized * exp_d
         # if not no_bounds:
         #     # xyz = xyz.clip(min=vmin, max=vmax)
         #     depth = xyz.clone()[..., 2].clip(min=vmin, max=vmax)

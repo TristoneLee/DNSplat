@@ -28,6 +28,7 @@ with install_import_hook(
     from src.misc.LocalLogger import LocalLogger
     from src.misc.step_tracker import StepTracker
     from src.misc.wandb_tools import update_checkpoint_path
+    from src.misc.wandb_tools import update_checkpoint_path
     from src.model.decoder import get_decoder
     from src.model.encoder import get_encoder
     from src.model.dnmodel_wrapper import ModelWrapper
@@ -110,6 +111,7 @@ def train(cfg_dict: DictConfig):
         max_steps=cfg.trainer.max_steps,
         # plugins=[SLURMEnvironment(requeue_signal=signal.SIGUSR1)],  # Uncomment for SLURM auto resubmission.
         inference_mode=False if (cfg.mode == "test" and cfg.test.align_pose) else True,
+        detect_anomaly= False,
     )
     torch.manual_seed(cfg_dict.seed + trainer.global_rank)
 

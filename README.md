@@ -77,6 +77,7 @@ conda create -y -n noposplat python=3.10
 conda activate noposplat
 pip install torch==2.1.2 torchvision==0.16.2 torchaudio==2.1.2 --index-url https://download.pytorch.org/whl/cu118
 pip install -r requirements.txt
+pip install ./thirdparty/diff-gaussian-rasterization-w-pose
 ```
 
 3. Optional, compile the cuda kernels for RoPE (as in CroCo v2).

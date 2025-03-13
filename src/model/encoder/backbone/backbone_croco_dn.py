@@ -6,7 +6,7 @@ from . import BackboneCrocoCfg
 
 from ....misc.cam_utils import update_pose
 
-from .croco.blocks import  Block, FFN
+from .croco.blocks import  Block, FFN, DoubleAttnBlock
 from .croco.croco import CroCoNet
 from .croco.misc import fill_default_args, freeze_all_params
 from .croco.patch_embed import get_patch_embed
@@ -20,6 +20,7 @@ class DnCroCo(CroCoNet):
     """
 
     def __init__(self, cfg: BackboneCrocoCfg, d_in: int) -> None:
+        self.token_pooling =False
 
         self.intrinsics_embed_loc = cfg.intrinsics_embed_loc
         self.intrinsics_embed_degree = cfg.intrinsics_embed_degree
@@ -51,9 +52,10 @@ class DnCroCo(CroCoNet):
         
         self.pluck_embedder = nn.Linear(6,self.dec_embed_dim)
         
-        self.extrinsics_decoder = FFN(self.dec_embed_dim,self.dec_embed_dim,6,3) 
+        self.extrinsics_decoder = FFN(self.dec_embed_dim,self.dec_embed_dim,6,2) 
+        
 
-        self.set_freeze('encoder')
+        self.set_freeze('none')
 
     def _set_patch_embed(self, img_size=224, patch_size=16, enc_embed_dim=768, in_chans=3):
         in_chans = in_chans + self.intrinsics_embed_encoder_dim
@@ -66,9 +68,14 @@ class DnCroCo(CroCoNet):
         enc_embed_dim = enc_embed_dim + self.intrinsics_embed_decoder_dim
         self.decoder_embed = nn.Linear(enc_embed_dim, dec_embed_dim, bias=True)
         # transformer for the decoder
-        self.dec_blocks = nn.ModuleList([
-            Block(dec_embed_dim, dec_num_heads, mlp_ratio=mlp_ratio, qkv_bias=True, norm_layer=norm_layer, rope=self.rope)
-            for i in range(dec_depth)])
+        if self.token_pooling:
+            self.dec_blocks = nn.ModuleList([
+                Block(dec_embed_dim, dec_num_heads, mlp_ratio=mlp_ratio, qkv_bias=True, norm_layer=norm_layer, rope=self.rope)
+                for _ in range(dec_depth)])
+        else:
+            self.dec_blocks = nn.ModuleList([
+                DoubleAttnBlock(dec_embed_dim, dec_num_heads, mlp_ratio=mlp_ratio, qkv_bias=True, norm_layer=norm_layer, rope=self.rope)
+                for _ in range(dec_depth)])
         # final norm layer
         self.dec_norm = norm_layer(dec_embed_dim)
 
@@ -129,39 +136,65 @@ class DnCroCo(CroCoNet):
     def _decoder(self, f, pos, context):
         # project to decoder dim
         # f [B, V, Num_patches, D]
+        b, v = f.shape[:2]
         f = self.decoder_embed(f)
-        pos = rearrange(pos, "b v n d -> b (v n) d")
+        pos = rearrange(pos if self.token_pooling else pos[:,:,:-1], "b v n d -> b (v n) d")
         final_output = []
         
-        intrinsics = context['intrinsics']
+        intrinsics = context['intrinsics']  # Remove detach()
         pred_extrinsics = []
         
-        extrinsics = self.canonical_camera_extrinsics[None].repeat(f.shape[0],f.shape[1],1,1).to(f.device)
+        # extrinsics = self.canonical_camera_extrinsics[None].repeat(f.shape[0],f.shape[1],1,1).to(f.device)
+        # extrinsics = self.canonical_camera_extrinsics[None].repeat(f.shape[0],f.shape[1]-1,1,1).to(f.device)
+        extrinsics = context['extrinsics'].reshape(b,v,4,4)[:,1:]
+        extrinsics = torch.cat((self.canonical_camera_extrinsics[None].repeat(f.shape[0],f.shape[1]-1,1,1).to(f.device),
+                                extrinsics+ torch.randn_like(extrinsics,device=f.device) * 0.01),dim = 1)
+        
+        if not self.token_pooling:
+            pooled_token = f[:,:,-1:]
+            f = f[:,:,:-1, :]        
         
         for blk in self.dec_blocks:
-            trans_delta,rot_delta = torch.chunk(self.extrinsics_decoder(f.mean(dim = 2, keepdim = False)), 2, dim = -1)
-            extrinsics = update_pose(trans_delta,rot_delta,extrinsics)
-            pred_extrinsics.append(extrinsics)
-            extrinsics[:,] = extrinsics[:,0] - extrinsics[:,0].data + self.canonical_camera_extrinsics.repeat(f.shape[0],1,1).to(f.device)
+            if self.token_pooling:
+                pooled_token = f.mean(dim = 2, keepdim = False)
+                pooled_token = pooled_token - pooled_token[:,:1]
+
+            trans_delta,rot_delta = torch.chunk(self.extrinsics_decoder(pooled_token[:,1:] - pooled_token[:,:1]), 2, dim = -1)
+            extrinsics = update_pose(trans_delta,rot_delta,extrinsics[:,1:])
+            extrinsics = torch.cat([
+                (self.canonical_camera_extrinsics.repeat(f.shape[0],1,1).unsqueeze(1).to(f.device)),
+                extrinsics
+            ], dim=1)
+            pred_extrinsics.append(extrinsics.clone())
+            
             plucker_ray= build_plucker_relative(extrinsics, intrinsics,256, 256, scale=1.0/16)
             plucker_ray = rearrange(plucker_ray, "b v h w d -> b v (h w) d")
-            ray_emb = torch.cat([self.pluck_embedder(plucker_ray),torch.zeros(f.shape[0],f.shape[1],1,f.shape[3]).to(f.device)],dim=2)
+            if self.token_pooling:
+                ray_emb = torch.cat([self.pluck_embedder(plucker_ray),torch.zeros(f.shape[0],f.shape[1],1,f.shape[3]).to(f.device)],dim=2)
+            else:
+                ray_emb = self.pluck_embedder(plucker_ray)
             f =  f + ray_emb
-            f = rearrange(f, "b v n d -> b (v n) d")
-            f = blk(f, pos)
-            f = rearrange(f, "b (v n) d -> b v n d", v = f.shape[1] // pos.shape[1])
+            
+            if not self.token_pooling:
+                f,pooled_token = blk(f, pos, pooled_token)
+            else:
+                f = blk(f, pos)
             # store the result
             final_output.append((f))
 
-        if self.intrinsics_embed_loc == 'encoder' and self.intrinsics_embed_type == 'token':
+        if self.intrinsics_embed_loc == 'encoder' and self.intrinsics_embed_type == 'token' and self.token_pooling:
             for i in range(len(final_output)):
                 final_output[i] = final_output[i][:,:,:-1, :]
 
         
         # normalize last output
-        final_output[-1] = tuple(map(self.dec_norm, final_output[-1]))
-        rot_delta, trans_delta = torch.chunk(self.extrinsics_decoder(f.mean(dim = 2, keepdim = False)), 2, dim = -1)
-        extrinsics = update_pose(trans_delta,rot_delta,extrinsics)
+        final_output[-1] = self.dec_norm(final_output[-1])
+        rot_delta, trans_delta = torch.chunk(self.extrinsics_decoder(pooled_token[:,1:] - pooled_token[:,:1]), 2, dim = -1)
+        extrinsics = update_pose(trans_delta,rot_delta,extrinsics[:,1:])
+        extrinsics = torch.cat([
+                (self.canonical_camera_extrinsics.repeat(f.shape[0],1,1).unsqueeze(1).to(f.device)),
+                extrinsics
+            ], dim=1)
         pred_extrinsics.append(extrinsics)
         return final_output, pred_extrinsics
 
@@ -182,6 +215,8 @@ class DnCroCo(CroCoNet):
         
         view = {'img': context["image"]}
 
+        true_shape = view.get('true_shape', torch.tensor(view['img'].shape[-2:])[None][None].repeat(b,v,1))
+
         # camera embedding in the encoder
         # intrinsic embedding [B, V, D, H, W]
         if self.intrinsics_embed_loc == 'encoder' and self.intrinsics_embed_type == 'pixelwise':
@@ -192,7 +227,6 @@ class DnCroCo(CroCoNet):
             intrinsic_embedding = self.intrinsic_encoder(context["intrinsics"].flatten(2))
             view['intrinsics_embed'] = intrinsic_embedding
 
-        true_shape = view.get('true_shape', torch.tensor(view['img'].shape[-2:])[None][None].repeat(b,v,1,1))
         feat, pos = self._encode_image(view['img'], true_shape, view.get('intrinsics_embed', None))
         
         dec, pred_extrinsics = self._decoder(feat, pos, context)
@@ -202,7 +236,7 @@ class DnCroCo(CroCoNet):
         ret_dict.update({'pred_extrinsics': pred_extrinsics})
 
         if return_views:
-            ret_dict.update('views',view)
+            ret_dict.update({'views':view})
         return ret_dict
 
     @property

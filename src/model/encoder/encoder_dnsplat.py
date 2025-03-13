@@ -106,29 +106,30 @@ class EncoderDnSplat(Encoder[EncoderNoPoSplatCfg]):
         # Encode the context images.
         ret = self.backbone(context, return_views=True)
         dec = ret['dec']
-        shape = ret['shape']
+        shape = ret['shape'].reshape(-1,2)
         views = ret['views']
-
+        imgs = views['img'].reshape(-1, 3, h, w)
+                
         with torch.cuda.amp.autocast(enabled=False):
-            res = self.downstream_head ([rearrange(tok,"b v d h w -> (bv) d h w").float() for tok in dec], shape)
+            res = self.head ([rearrange(tok,"b v n d-> (b v) n d").float() for tok in dec], shape)
 
             # for the 3DGS heads
             if self.gs_params_head_type == 'linear':
-                GS_res = rearrange_head(self.gaussian_param_head(dec[-1]), self.patch_size, h, w)
+                gaussians = rearrange_head(self.gaussian_param_head(dec[-1]), self.patch_size, h, w)
             elif self.gs_params_head_type == 'dpt':
-                GS_res = self.gaussian_param_head([rearrange(tok,"b v d h w -> (bv) d h w").float() for tok in dec], shape[0].cpu().tolist())
-                GS_res = rearrange(GS_res, "b d h w -> b (h w) d")
+                gaussians = self.gaussian_param_head([rearrange(tok,"b v n d -> (b v) n d").float() for tok in dec], shape[0].cpu().tolist())
+                gaussians = rearrange(gaussians, "b d h w -> b (h w) d")
             elif self.gs_params_head_type == 'dpt_gs':
-                GS_res = self.gaussian_param_head([rearrange(tok,"b v d h w -> (bv) d h w").float() for tok in dec], res['pts3d'].permute(0, 3, 1, 2), views['img'][:, :3], shape[0].cpu().tolist())
-                GS_res = rearrange(GS_res, "b d h w -> b (h w) d")
+                gaussians = self.gaussian_param_head([rearrange(tok,"b v n d -> (b v) n d").float() for tok in dec], res['pts3d'].permute(0, 3, 1, 2), imgs, shape[0].cpu().tolist())
+                gaussians = rearrange(gaussians, "b d h w -> b (h w) d")
 
         pts3d = res['pts3d']
-        pts3d = rearrange(pts3d, "b h w d -> b (h w) d")
-        pts_all = pts_all.unsqueeze(-2)  # for cfg.num_surfaces
+        pts3d = rearrange(pts3d, "(b v) h w d -> b v (h w) d", b= b)
+        pts_all = pts3d.unsqueeze(-2)  # for cfg.num_surfaces
 
         depths = pts_all[..., -1].unsqueeze(-1)
 
-        gaussians = rearrange(gaussians, "... (srf c) -> ... srf c", srf=self.cfg.num_surfaces)
+        gaussians = rearrange(gaussians, "(b v) n (srf c) -> b v n srf c", srf=self.cfg.num_surfaces, b = b)
         densities = gaussians[..., 0].sigmoid().unsqueeze(-1)
 
         # Convert the features and depths into Gaussians.
@@ -191,7 +192,7 @@ class EncoderDnSplat(Encoder[EncoderNoPoSplatCfg]):
             ),
         )}
         
-        ret_dict.update('pred_extrinsics', context['extrinsics'])
+        ret_dict.update({'pred_extrinsics': ret['pred_extrinsics']})
         
         return ret_dict
 
